@@ -12,7 +12,7 @@
         --muted: rgba(255, 255, 255, 0.72);
         --hairline: rgba(255, 255, 255, 0.6);
         --fade: 0.5s;
-        --delay-to-name-ms: 2000;
+        --delay-to-name-ms: 1200;
         --min-radius-px: 6;
         --stroke: 2;
         --dash: 3 7;
@@ -258,7 +258,7 @@
       const WS_HOST = "192.168.0.144"; // e.g. "192.168.1.10" (or use location.hostname)
       const WS_PORT = 9980;
       const PAYLOAD_TYPE = "circle";
-      const DEFAULT_NAME = "wen";
+      const DEFAULT_NAME = "<333";
       const TRANSITION_DELAY_MS = Number(
         getComputedStyle(document.documentElement).getPropertyValue("--delay-to-name-ms").trim() || "2000",
       );
@@ -582,18 +582,22 @@
 
       // -------- Event binding (touch + mouse) --------
       app.addEventListener("touchstart", (e) => {
+        if (mode !== "draw") return;
         e.preventDefault();
         onStart(e);
       }, { passive: false });
       app.addEventListener("touchmove", (e) => {
+        if (mode !== "draw") return;
         e.preventDefault();
         onMove(e);
       }, { passive: false });
       app.addEventListener("touchend", (e) => {
+        if (mode !== "draw") return;
         e.preventDefault();
         onEnd(e);
       }, { passive: false });
       app.addEventListener("touchcancel", (e) => {
+        if (mode !== "draw") return;
         e.preventDefault();
         onEnd(e);
       }, { passive: false });
