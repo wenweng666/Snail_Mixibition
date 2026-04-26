@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>circle sender</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #000;
+        --fg: #fff;
+        --muted: rgba(255, 255, 255, 0.72);
+        --hairline: rgba(255, 255, 255, 0.6);
+        --fade: 0.5s;
+        --delay-to-name-ms: 2000;
+        --min-radius-px: 6;
+        --stroke: 2;
+        --dash: 3 7;
+      }
+
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+          "Apple Color Emoji", "Segoe UI Emoji";
+        letter-spacing: 0.01em;
+      }
+
+      #app {
+        height: 100%;
+        width: 100%;
+        position: relative;
+        overflow: hidden;
+        touch-action: none;
+        user-select: none;
+      }
+
+      .screen {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 260ms ease;
+      }
+      .screen.active {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .center-stack {
+        display: grid;
+        gap: 14px;
+        justify-items: center;
+        text-align: center;
+        padding: 24px;
+        width: min(520px, 92vw);
+      }
+
+      .hint {
+        font-size: 14px;
+        color: var(--muted);
+        font-weight: 300;
+        text-transform: lowercase;
+      }
+
+      .prompt {
+        font-size: 18px;
+        font-weight: 400;
+        text-transform: lowercase;
+      }
+
+      .input {
+        width: min(360px, 86vw);
+        font-size: 16px;
+        padding: 12px 12px;
+        background: transparent;
+        color: var(--fg);
+        border: 1px solid var(--hairline);
+        border-radius: 0;
+        outline: none;
+      }
+      .input:focus {
+        border-color: var(--fg);
+      }
+
+      .btn {
+        font-size: 14px;
+        padding: 12px 16px;
+        border-radius: 0;
+        border: 1px solid var(--fg);
+        background: #000;
+        color: var(--fg);
+        text-transform: lowercase;
+        cursor: pointer;
+      }
+      .btn:active {
+        transform: translateY(1px);
+      }
+
+      .hud {
+        position: absolute;
+        left: 12px;
+        bottom: 10px;
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.5);
+        pointer-events: none;
+        text-transform: lowercase;
+      }
+
+      /* Drawing overlay */
+      #drawLayer {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      /* Pulse origin dot */
+      #originDot {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--fg);
+        transform: translate(-50%, -50%);
+        opacity: 0.9;
+        animation: breathe 3.2s ease-in-out infinite;
+      }
+      @keyframes breathe {
+        0% {
+          opacity: 0.25;
+        }
+        50% {
+          opacity: 0.9;
+        }
+        100% {
+          opacity: 0.25;
+        }
+      }
+
+      #originDot.fading,
+      #guideGroup.fading {
+        transition: opacity var(--fade) ease;
+        opacity: 0;
+      }
+
+      /* History table */
+      .table-wrap {
+        width: min(720px, 92vw);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        color: rgba(255, 255, 255, 0.92);
+        text-transform: lowercase;
+      }
+      th,
+      td {
+        padding: 10px 4px;
+        font-weight: 350;
+        text-align: left;
+      }
+      th {
+        color: rgba(255, 255, 255, 0.6);
+        font-weight: 450;
+      }
+      tr + tr td {
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      #againBar {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 18px;
+        display: grid;
+        place-items: center;
+        pointer-events: none;
+      }
+      #againBar .btn {
+        pointer-events: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app" aria-label="circle sender app">
+      <svg id="drawLayer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <g id="persistentGroup"></g>
+        <g id="guideGroup">
+          <circle id="guideCircle" cx="0" cy="0" r="0" fill="none" stroke="#fff" stroke-width="2"></circle>
+          <line
+            id="guideLine"
+            x1="0"
+            y1="0"
+            x2="0"
+            y2="0"
+            stroke="#fff"
+            stroke-width="2"
+            stroke-dasharray="3 7"
+            stroke-linecap="round"
+          ></line>
+        </g>
+      </svg>
+
+      <div id="originDot" aria-hidden="true"></div>
+
+      <div id="screenDraw" class="screen active" aria-label="draw screen">
+        <div class="center-stack">
+          <div style="height: 1px"></div>
+          <div class="hint" id="drawHint">hold and drag a circle</div>
+        </div>
+      </div>
+
+      <div id="screenName" class="screen" aria-label="name screen">
+        <form class="center-stack" id="nameForm">
+          <div class="prompt" id="namePrompt">what's your name?</div>
+          <input class="input" id="nameInput" autocomplete="name" inputmode="text" spellcheck="false" />
+          <button class="btn" type="submit">ok. send</button>
+        </form>
+      </div>
+
+      <div id="screenHistory" class="screen" aria-label="history screen">
+        <div class="center-stack" style="gap: 18px; width: 100%">
+          <div class="table-wrap">
+            <table aria-label="submission history">
+              <thead>
+                <tr>
+                  <th style="width: 44px">#</th>
+                  <th>name</th>
+                  <th style="width: 96px">size</th>
+                  <th style="width: 110px">speed</th>
+                </tr>
+              </thead>
+              <tbody id="historyBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="againBar">
+          <button class="btn" id="againBtn" type="button">again?</button>
+        </div>
+      </div>
+
+      <div class="hud" id="statusHud"></div>
+    </div>
+
+    <script>
+      // -------- Config you’ll likely edit --------
+      const WS_HOST = "[HOST_IP]"; // e.g. "192.168.1.10" (or use location.hostname)
+      const WS_PORT = 9980;
+      const PAYLOAD_TYPE = "circle";
+      const DEFAULT_NAME = "wen";
+      const TRANSITION_DELAY_MS = Number(
+        getComputedStyle(document.documentElement).getPropertyValue("--delay-to-name-ms").trim() || "2000",
+      );
+      const FADE_DURATION_MS = 500;
+      const SIZE_MAX_NORM = 2.0;
+      const SPEED_MAX = 1000;
+
+      // -------- Elements --------
+      const app = document.getElementById("app");
+      const screenDraw = document.getElementById("screenDraw");
+      const screenName = document.getElementById("screenName");
+      const screenHistory = document.getElementById("screenHistory");
+      const drawHint = document.getElementById("drawHint");
+      const nameForm = document.getElementById("nameForm");
+      const nameInput = document.getElementById("nameInput");
+      const historyBody = document.getElementById("historyBody");
+      const againBtn = document.getElementById("againBtn");
+      const statusHud = document.getElementById("statusHud");
+
+      const drawLayer = document.getElementById("drawLayer");
+      const guideGroup = document.getElementById("guideGroup");
+      const guideCircle = document.getElementById("guideCircle");
+      const guideLine = document.getElementById("guideLine");
+      const persistentGroup = document.getElementById("persistentGroup");
+      const originDot = document.getElementById("originDot");
+
+      // -------- State --------
+      const history = [];
+      let ws = null;
+      let wsBackoffMs = 250;
+      let wsManuallyClosed = false;
+
+      let mode = "draw"; // draw | name | history
+
+      let isDragging = false;
+      let origin = null; // {x,y} in px
+      let lastPointer = null; // {x,y,t}
+      let dragStart = null; // {x,y,t}
+      let pathDistPx = 0;
+
+      let captured = null; // { sizeNorm, speedPps, origin, radiusPx }
+      let transitionTimer = null;
+
+      // -------- Helpers --------
+      function clamp(n, min, max) {
+        return Math.max(min, Math.min(max, n));
+      }
+
+      function now() {
+        return performance.now();
+      }
+
+      function setActiveScreen(next) {
+        mode = next;
+        screenDraw.classList.toggle("active", next === "draw");
+        screenName.classList.toggle("active", next === "name");
+        screenHistory.classList.toggle("active", next === "history");
+        if (next === "name") {
+          setTimeout(() => {
+            nameInput.focus();
+          }, 50);
+        }
+      }
+
+      function setSvgViewBoxToPixels() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        drawLayer.setAttribute("viewBox", `0 0 ${w} ${h}`);
+      }
+
+      function setOriginDot(x, y) {
+        originDot.style.left = `${x}px`;
+        originDot.style.top = `${y}px`;
+      }
+
+      function setGuide(originPx, currentPx) {
+        const dx = currentPx.x - originPx.x;
+        const dy = currentPx.y - originPx.y;
+        const r = Math.max(Math.hypot(dx, dy), Number(getCssVar("--min-radius-px", 6)));
+        guideCircle.setAttribute("cx", originPx.x);
+        guideCircle.setAttribute("cy", originPx.y);
+        guideCircle.setAttribute("r", r);
+        guideCircle.setAttribute("stroke-width", getCssVar("--stroke", 2));
+
+        guideLine.setAttribute("x1", originPx.x);
+        guideLine.setAttribute("y1", originPx.y);
+        guideLine.setAttribute("x2", currentPx.x);
+        guideLine.setAttribute("y2", currentPx.y);
+        guideLine.setAttribute("stroke-width", getCssVar("--stroke", 2));
+        guideLine.setAttribute("stroke-dasharray", getCssVar("--dash", "3 7"));
+      }
+
+      function getCssVar(name, fallback) {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        return v || fallback;
+      }
+
+      function clearGuideFade() {
+        originDot.classList.remove("fading");
+        guideGroup.classList.remove("fading");
+        originDot.style.opacity = "";
+        guideGroup.style.opacity = "";
+      }
+
+      function fadeOutGuide() {
+        originDot.classList.add("fading");
+        guideGroup.classList.add("fading");
+      }
+
+      function renderPersistentCircle(originPx, radiusPx) {
+        persistentGroup.innerHTML = "";
+        const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        c.setAttribute("cx", originPx.x);
+        c.setAttribute("cy", originPx.y);
+        c.setAttribute("r", radiusPx);
+        c.setAttribute("fill", "none");
+        c.setAttribute("stroke", "#fff");
+        c.setAttribute("stroke-width", getCssVar("--stroke", 2));
+        persistentGroup.appendChild(c);
+      }
+
+      function hidePersistentCircle() {
+        persistentGroup.innerHTML = "";
+      }
+
+      function buildPayload(name) {
+        return {
+          type: PAYLOAD_TYPE,
+          name,
+          size: captured?.sizeNorm ?? 0,
+          speed: captured?.speedPps ?? 0,
+        };
+      }
+
+      function formatSize(n) {
+        return Number.isFinite(n) ? n.toFixed(2) : "0.00";
+      }
+
+      function formatSpeed(n) {
+        const v = Number.isFinite(n) ? Math.round(n) : 0;
+        return String(v);
+      }
+
+      function renderHistory() {
+        historyBody.innerHTML = history
+          .map((row, idx) => {
+            const i = idx + 1;
+            return `<tr>
+              <td>${i}</td>
+              <td>${escapeHtml(row.name)}</td>
+              <td>${formatSize(row.size)}</td>
+              <td>${formatSpeed(row.speed)}</td>
+            </tr>`;
+          })
+          .join("");
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      // -------- WebSocket --------
+      function wsUrl() {
+        const host = WS_HOST === "[HOST_IP]" ? (location.hostname || "127.0.0.1") : WS_HOST;
+        return `ws://${host}:${WS_PORT}`;
+      }
+
+      function setStatus(text) {
+        statusHud.textContent = text;
+      }
+
+      function connectWs() {
+        if (wsManuallyClosed) return;
+        try {
+          ws = new WebSocket(wsUrl());
+        } catch (e) {
+          scheduleReconnect();
+          return;
+        }
+
+        setStatus("connecting…");
+
+        ws.addEventListener("open", () => {
+          wsBackoffMs = 250;
+          setStatus("connected");
+        });
+
+        ws.addEventListener("close", () => {
+          setStatus("disconnected");
+          scheduleReconnect();
+        });
+
+        ws.addEventListener("error", () => {
+          setStatus("socket error");
+          try {
+            ws.close();
+          } catch {}
+        });
+      }
+
+      function scheduleReconnect() {
+        if (wsManuallyClosed) return;
+        const wait = wsBackoffMs;
+        wsBackoffMs = Math.min(6000, Math.round(wsBackoffMs * 1.7));
+        setStatus(`reconnecting in ${Math.round(wait / 100) / 10}s…`);
+        setTimeout(() => connectWs(), wait);
+      }
+
+      function sendPayload(payload) {
+        const msg = JSON.stringify(payload);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(msg);
+          return true;
+        }
+        return false;
+      }
+
+      // -------- Input / Drag logic --------
+      function getPointFromEvent(e) {
+        if (e.touches && e.touches.length) {
+          return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        }
+        if (e.changedTouches && e.changedTouches.length) {
+          return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+        }
+        return { x: e.clientX, y: e.clientY };
+      }
+
+      function onStart(e) {
+        if (mode !== "draw") return;
+        if (isDragging) return;
+        isDragging = true;
+
+        if (transitionTimer) {
+          clearTimeout(transitionTimer);
+          transitionTimer = null;
+        }
+
+        drawHint.style.visibility = "hidden";
+        clearGuideFade();
+        guideGroup.style.opacity = "1";
+        originDot.style.opacity = "0.9";
+
+        const p = getPointFromEvent(e);
+        const t = now();
+        origin = { x: p.x, y: p.y };
+        dragStart = { x: p.x, y: p.y, t };
+        lastPointer = { x: p.x, y: p.y, t };
+        pathDistPx = 0;
+
+        setOriginDot(origin.x, origin.y);
+        setGuide(origin, p);
+      }
+
+      function onMove(e) {
+        if (!isDragging || mode !== "draw" || !origin || !lastPointer) return;
+        const p = getPointFromEvent(e);
+        const t = now();
+        const dx = p.x - lastPointer.x;
+        const dy = p.y - lastPointer.y;
+        pathDistPx += Math.hypot(dx, dy);
+        lastPointer = { x: p.x, y: p.y, t };
+        setGuide(origin, p);
+      }
+
+      function onEnd(e) {
+        if (!isDragging || mode !== "draw" || !origin || !dragStart || !lastPointer) return;
+        isDragging = false;
+
+        const endPoint = getPointFromEvent(e);
+        const radiusPx = Math.max(Math.hypot(endPoint.x - origin.x, endPoint.y - origin.y), 0);
+
+        const durationMs = Math.max(1, lastPointer.t - dragStart.t);
+        const speed = clamp((pathDistPx / durationMs) * 1000, 0, SPEED_MAX);
+
+        const sizeNormRaw = (radiusPx / window.innerWidth) * 2;
+        const sizeNorm = clamp(sizeNormRaw, 0, SIZE_MAX_NORM);
+
+        captured = {
+          sizeNorm,
+          speedPps: speed,
+          origin: { ...origin },
+          radiusPx,
+        };
+
+        renderPersistentCircle(captured.origin, captured.radiusPx);
+
+        transitionTimer = setTimeout(() => {
+          fadeOutGuide();
+          setTimeout(() => {
+            setActiveScreen("name");
+            nameInput.value = DEFAULT_NAME;
+            nameInput.select();
+          }, FADE_DURATION_MS);
+        }, TRANSITION_DELAY_MS);
+      }
+
+      // -------- Screen interactions --------
+      nameForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const name = (nameInput.value || "").trim() || DEFAULT_NAME;
+        const payload = buildPayload(name);
+        sendPayload(payload);
+
+        history.push({ name: payload.name, size: payload.size, speed: payload.speed });
+        renderHistory();
+        setActiveScreen("history");
+      });
+
+      againBtn.addEventListener("click", () => {
+        setActiveScreen("draw");
+        drawHint.style.visibility = "visible";
+        hidePersistentCircle();
+        clearGuideFade();
+      });
+
+      // -------- Event binding (touch + mouse) --------
+      app.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        onStart(e);
+      }, { passive: false });
+      app.addEventListener("touchmove", (e) => {
+        e.preventDefault();
+        onMove(e);
+      }, { passive: false });
+      app.addEventListener("touchend", (e) => {
+        e.preventDefault();
+        onEnd(e);
+      }, { passive: false });
+      app.addEventListener("touchcancel", (e) => {
+        e.preventDefault();
+        onEnd(e);
+      }, { passive: false });
+
+      app.addEventListener("mousedown", (e) => onStart(e));
+      window.addEventListener("mousemove", (e) => onMove(e));
+      window.addEventListener("mouseup", (e) => onEnd(e));
+
+      // -------- Init --------
+      function init() {
+        setSvgViewBoxToPixels();
+
+        const cx = window.innerWidth / 2;
+        const cy = window.innerHeight / 2;
+        setOriginDot(cx, cy);
+        guideGroup.style.opacity = "0";
+        originDot.style.opacity = "0.9";
+
+        connectWs();
+      }
+
+      window.addEventListener("resize", () => {
+        setSvgViewBoxToPixels();
+        if (captured?.origin && captured?.radiusPx && mode !== "history") {
+          renderPersistentCircle(captured.origin, captured.radiusPx);
+        }
+      });
+
+      window.addEventListener("beforeunload", () => {
+        wsManuallyClosed = true;
+        try {
+          ws?.close();
+        } catch {}
+      });
+
+      init();
+    </script>
+  </body>
+</html>
