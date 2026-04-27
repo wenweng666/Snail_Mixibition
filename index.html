@@ -294,6 +294,7 @@
 
       // -------- State --------
       const history = [];
+      let serverHistory = [];
       let ws = null;
       let wsBackoffMs = 250;
       let wsManuallyClosed = false;
@@ -401,16 +402,23 @@
       }
 
       function formatSize(n) {
-        return Number.isFinite(n) ? n.toFixed(2) : "0.00";
+        const v = parseFloat(n);
+        return Number.isFinite(v) ? v.toFixed(2) : "0.00";
       }
 
       function formatSpeed(n) {
-        const v = Number.isFinite(n) ? Math.round(n) : 0;
-        return String(v);
+        const v = parseFloat(n);
+        return Number.isFinite(v) ? String(Math.round(v)) : "0";
+      }
+
+      function getHistoryToRender() {
+        if (Array.isArray(serverHistory) && serverHistory.length > 0) return serverHistory;
+        return history;
       }
 
       function renderHistory() {
-        historyBody.innerHTML = history
+        const rows = getHistoryToRender();
+        historyBody.innerHTML = rows
           .map((row, idx) => {
             const i = idx + 1;
             return `<tr>
@@ -473,6 +481,24 @@
           try {
             ws.close();
           } catch {}
+        });
+
+        ws.addEventListener("message", (event) => {
+          let msg;
+          try {
+            msg = JSON.parse(event.data);
+          } catch {
+            return;
+          }
+          if (!msg || msg.type !== "history") return;
+          if (!Array.isArray(msg.data)) return;
+
+          serverHistory = msg.data;
+
+          if (mode === "history") {
+            renderHistory();
+            requestAnimationFrame(scrollHistoryToBottom);
+          }
         });
       }
 
