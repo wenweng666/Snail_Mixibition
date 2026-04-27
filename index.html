@@ -156,6 +156,11 @@
       /* History table */
       .table-wrap {
         width: min(720px, 92vw);
+        max-height: calc(100vh - 150px);
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 84px; /* space so last row isn't hidden behind button */
       }
       table {
         width: 100%;
@@ -231,7 +236,7 @@
 
       <div id="screenHistory" class="screen" aria-label="history screen">
         <div class="center-stack" style="gap: 18px; width: 100%">
-          <div class="table-wrap">
+          <div class="table-wrap" id="historyScroll">
             <table aria-label="submission history">
               <thead>
                 <tr>
@@ -263,7 +268,8 @@
         getComputedStyle(document.documentElement).getPropertyValue("--delay-to-name-ms").trim() || "2000",
       );
       const FADE_DURATION_MS = 500;
-      const SIZE_MAX_NORM = 2.0;
+      const SIZE_MIN_NORM = 0.01;
+      const SIZE_MAX_NORM = 0.8;
       const SPEED_MAX = 1000;
 
       // -------- Elements --------
@@ -275,6 +281,7 @@
       const nameForm = document.getElementById("nameForm");
       const nameInput = document.getElementById("nameInput");
       const historyBody = document.getElementById("historyBody");
+      const historyScroll = document.getElementById("historyScroll");
       const againBtn = document.getElementById("againBtn");
       const statusHud = document.getElementById("statusHud");
 
@@ -416,6 +423,11 @@
           .join("");
       }
 
+      function scrollHistoryToBottom() {
+        if (!historyScroll) return;
+        historyScroll.scrollTop = historyScroll.scrollHeight;
+      }
+
       function escapeHtml(s) {
         return String(s)
           .replaceAll("&", "&amp;")
@@ -539,8 +551,9 @@
         const durationMs = Math.max(1, lastPointer.t - dragStart.t);
         const speed = clamp((pathDistPx / durationMs) * 1000, 0, SPEED_MAX);
 
-        const sizeNormRaw = (radiusPx / window.innerWidth) * 2;
-        const sizeNorm = clamp(sizeNormRaw, 0, SIZE_MAX_NORM);
+        const diagonal = Math.sqrt(window.innerWidth ** 2 + window.innerHeight ** 2);
+        const sizeNormRaw = (radiusPx / diagonal) * 2;
+        const sizeNorm = clamp(sizeNormRaw, SIZE_MIN_NORM, SIZE_MAX_NORM);
 
         captured = {
           sizeNorm,
@@ -571,6 +584,7 @@
         history.push({ name: payload.name, size: payload.size, speed: payload.speed });
         renderHistory();
         setActiveScreen("history");
+        requestAnimationFrame(scrollHistoryToBottom);
       });
 
       againBtn.addEventListener("click", () => {
