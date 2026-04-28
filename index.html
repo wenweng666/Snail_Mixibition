@@ -260,8 +260,16 @@
 
     <script>
       // -------- Config you’ll likely edit --------
-      const WS_HOST = "192.168.0.144"; // e.g. "192.168.1.10" (or use location.hostname)
-      const WS_PORT = 9980;
+      // IN socket: listens for circle info / history from the server on the provided IP.
+      const WS_IN_HOST = "10.50.30.166"; // e.g. "192.168.1.10" (or use location.hostname)
+      // IMPORTANT: this must NOT be the same port as TD's WebSocket port.
+      //const WS_IN_PORT = 9981;
+
+      // TD socket: sends processed payloads to TouchDesigner running on localhost.
+      // If you open this page on a phone, DO NOT use "127.0.0.1" (that would be the phone).
+      // Default to the same machine as WS_IN_HOST (your laptop running TD).
+      const TD_WS_HOST = WS_IN_HOST;
+      const TD_WS_PORT = 9980;
       const PAYLOAD_TYPE = "circle";
       const DEFAULT_NAME = "<333";
       const TRANSITION_DELAY_MS = Number(
@@ -295,9 +303,16 @@
       // -------- State --------
       const history = [];
       let serverHistory = [];
-      let ws = null;
-      let wsBackoffMs = 250;
-      let wsManuallyClosed = false;
+      // IN: from circle server
+      let wsIn = null;
+      let wsInBackoffMs = 250;
+      let wsInManuallyClosed = false;
+
+      // TD OUT: to TouchDesigner
+      let wsTd = null;
+      let wsTdBackoffMs = 250;
+      let wsTdManuallyClosed = false;
+      const tdOutbox = [];
 
       let mode = "draw"; // draw | name | history
 
@@ -446,76 +461,157 @@
       }
 
       // -------- WebSocket --------
-      function wsUrl() {
-        const host = WS_HOST === "[HOST_IP]" ? (location.hostname || "127.0.0.1") : WS_HOST;
-        return `ws://${host}:${WS_PORT}`;
+      function wsInUrl() {
+        const host = WS_IN_HOST === "[HOST_IP]" ? (location.hostname || "127.0.0.1") : WS_IN_HOST;
+        return `ws://${host}:${WS_IN_PORT}`;
+      }
+
+      function wsTdUrl() {
+        const host = TD_WS_HOST === "[HOST_IP]" ? (location.hostname || "127.0.0.1") : TD_WS_HOST;
+        return `ws://${host}:${TD_WS_PORT}`;
       }
 
       function setStatus(text) {
         statusHud.textContent = text;
       }
 
-      function connectWs() {
-        if (wsManuallyClosed) return;
+      function renderStatus({ inStatus, tdStatus }) {
+        const inText = inStatus || "—";
+        const tdText = tdStatus || "—";
+        const queued = tdOutbox.length ? ` (q:${tdOutbox.length})` : "";
+        setStatus(`in: ${inText}   td: ${tdText}${queued}`);
+      }
+
+      let lastInStatus = "";
+      let lastTdStatus = "";
+
+      function setInStatus(s) {
+        lastInStatus = s;
+        renderStatus({ inStatus: lastInStatus, tdStatus: lastTdStatus });
+      }
+
+      function setTdStatus(s) {
+        lastTdStatus = s;
+        renderStatus({ inStatus: lastInStatus, tdStatus: lastTdStatus });
+      }
+
+      function connectWsIn() {
+        if (wsInManuallyClosed) return;
         try {
-          ws = new WebSocket(wsUrl());
+          wsIn = new WebSocket(wsInUrl());
         } catch (e) {
-          scheduleReconnect();
+          scheduleReconnectIn();
           return;
         }
 
-        setStatus("connecting…");
+        setInStatus("connecting…");
 
-        ws.addEventListener("open", () => {
-          wsBackoffMs = 250;
-          setStatus("connected");
+        wsIn.addEventListener("open", () => {
+          wsInBackoffMs = 250;
+          setInStatus("connected");
         });
 
-        ws.addEventListener("close", () => {
-          setStatus("disconnected");
-          scheduleReconnect();
+        wsIn.addEventListener("close", () => {
+          setInStatus("disconnected");
+          scheduleReconnectIn();
         });
 
-        ws.addEventListener("error", () => {
-          setStatus("socket error");
+        wsIn.addEventListener("error", () => {
+          setInStatus("socket error");
           try {
-            ws.close();
+            wsIn.close();
           } catch {}
         });
 
-        ws.addEventListener("message", (event) => {
+        wsIn.addEventListener("message", (event) => {
           let msg;
           try {
             msg = JSON.parse(event.data);
           } catch {
             return;
           }
-          if (!msg || msg.type !== "history") return;
-          if (!Array.isArray(msg.data)) return;
 
-          serverHistory = msg.data;
+          // history sync (optional)
+          if (msg && msg.type === "history" && Array.isArray(msg.data)) {
+            serverHistory = msg.data;
 
-          if (mode === "history") {
-            renderHistory();
-            requestAnimationFrame(scrollHistoryToBottom);
+            if (mode === "history") {
+              renderHistory();
+              requestAnimationFrame(scrollHistoryToBottom);
+            }
+            return;
+          }
+
+          // circle event from clients -> forward to TD
+          if (msg && (msg.type === PAYLOAD_TYPE || msg.type === "circle")) {
+            sendPayload(msg);
           }
         });
       }
 
-      function scheduleReconnect() {
-        if (wsManuallyClosed) return;
-        const wait = wsBackoffMs;
-        wsBackoffMs = Math.min(6000, Math.round(wsBackoffMs * 1.7));
-        setStatus(`reconnecting in ${Math.round(wait / 100) / 10}s…`);
-        setTimeout(() => connectWs(), wait);
+      function scheduleReconnectIn() {
+        if (wsInManuallyClosed) return;
+        const wait = wsInBackoffMs;
+        wsInBackoffMs = Math.min(6000, Math.round(wsInBackoffMs * 1.7));
+        setInStatus(`reconnecting in ${Math.round(wait / 100) / 10}s…`);
+        setTimeout(() => connectWsIn(), wait);
+      }
+
+      function connectWsTd() {
+        if (wsTdManuallyClosed) return;
+        try {
+          wsTd = new WebSocket(wsTdUrl());
+        } catch (e) {
+          scheduleReconnectTd();
+          return;
+        }
+
+        setTdStatus("connecting…");
+
+        wsTd.addEventListener("open", () => {
+          wsTdBackoffMs = 250;
+          setTdStatus("connected");
+          flushTdOutbox();
+        });
+
+        wsTd.addEventListener("close", () => {
+          setTdStatus("disconnected");
+          scheduleReconnectTd();
+        });
+
+        wsTd.addEventListener("error", () => {
+          setTdStatus("socket error");
+          try {
+            wsTd.close();
+          } catch {}
+        });
+      }
+
+      function scheduleReconnectTd() {
+        if (wsTdManuallyClosed) return;
+        const wait = wsTdBackoffMs;
+        wsTdBackoffMs = Math.min(6000, Math.round(wsTdBackoffMs * 1.7));
+        setTdStatus(`reconnecting in ${Math.round(wait / 100) / 10}s…`);
+        setTimeout(() => connectWsTd(), wait);
+      }
+
+      function flushTdOutbox() {
+        if (!wsTd || wsTd.readyState !== WebSocket.OPEN) return;
+        while (tdOutbox.length) {
+          wsTd.send(tdOutbox.shift());
+        }
       }
 
       function sendPayload(payload) {
         const msg = JSON.stringify(payload);
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(msg);
+        // Always send processed payloads to TD (localhost).
+        if (wsTd && wsTd.readyState === WebSocket.OPEN) {
+          wsTd.send(msg);
           return true;
         }
+        // If TD isn't connected yet, queue it (bounded so it can't grow forever).
+        tdOutbox.push(msg);
+        if (tdOutbox.length > 200) tdOutbox.splice(0, tdOutbox.length - 200);
         return false;
       }
 
@@ -656,7 +752,11 @@
         guideGroup.style.opacity = "0";
         originDot.style.opacity = "0.9";
 
-        connectWs();
+        // Two sockets:
+        // - IN: listen for circle info / history from 10.50.30.156 (or whatever you set)
+        // - TD: send processed payloads to TouchDesigner on localhost
+        connectWsIn();
+        connectWsTd();
       }
 
       window.addEventListener("resize", () => {
@@ -667,9 +767,13 @@
       });
 
       window.addEventListener("beforeunload", () => {
-        wsManuallyClosed = true;
+        wsInManuallyClosed = true;
+        wsTdManuallyClosed = true;
         try {
-          ws?.close();
+          wsIn?.close();
+        } catch {}
+        try {
+          wsTd?.close();
         } catch {}
       });
 
